@@ -63,6 +63,11 @@ class MainActivity : AppCompatActivity() {
             showAddWaterDialog()
         }
 
+        // Bir önceki işlemi geri alma butonu
+        binding.btnUndo.setOnClickListener {
+            undoLastIntake()
+        }
+
         // Günü bitir butonu
         binding.btnFinishDay.setOnClickListener {
             showFinishDayConfirmation()
@@ -92,6 +97,11 @@ class MainActivity : AppCompatActivity() {
         } else {
             binding.cardCelebration.visibility = View.GONE
         }
+
+        // Geri alma butonu durumu: Eğer bugün içim kaydı yoksa pasif/aktif durumu
+        val intakes = prefs.getTodayIntakes()
+        binding.btnUndo.isEnabled = intakes.isNotEmpty()
+        binding.btnUndo.alpha = if (intakes.isNotEmpty()) 1.0f else 0.5f
     }
 
     private fun refreshQuickButtons() {
@@ -117,9 +127,31 @@ class MainActivity : AppCompatActivity() {
         val newAmount = prefs.currentWater + amount
         prefs.currentWater = newAmount
         prefs.addRecentAmount(amount)
+
+        // Bugünkü saatlik içim listesine kaydet
+        val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
+        val timeStr = timeFormat.format(Date())
+        prefs.addTodayIntake(WaterIntakeRecord(timeStr = timeStr, amount = amount))
+
         refreshDailyUI()
         refreshQuickButtons()
         Toast.makeText(this, String.format(Locale.getDefault(), "+%.2f L su eklendi", amount), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun undoLastIntake() {
+        val lastIntake = prefs.removeLastIntake()
+        if (lastIntake != null) {
+            val updated = (prefs.currentWater - lastIntake.amount).coerceAtLeast(0.0)
+            prefs.currentWater = updated
+            refreshDailyUI()
+            Toast.makeText(
+                this,
+                String.format(Locale.getDefault(), "Geri alındı: -%.2f L (%s)", lastIntake.amount, lastIntake.timeStr),
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            Toast.makeText(this, "Geri alınacak bir işlem yok!", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showAddWaterDialog() {
@@ -197,7 +229,7 @@ class MainActivity : AppCompatActivity() {
         builder.setMessage(
             String.format(
                 Locale.getDefault(),
-                "Bugünkü toplam tüketiminiz: %.2f L\n\nGünü bitirmek istediğinizden emin misiniz? Gün kaydedilecek ve yeni gün 0 L ile başlayacaktır.",
+                "Bugünkü toplam tüketiminiz: %.2f L\n\nGünü bitirmek istediğinizden emin misiniz? Gün haftalık istatistiklere kaydedilecek ve günlük saatlik döküm sıfırlanacaktır.",
                 current
             )
         )
@@ -228,15 +260,33 @@ class MainActivity : AppCompatActivity() {
         // Yeni gün sıfırdan başlar
         prefs.currentWater = 0.0
 
+        // Günlük içim listesi gün bitiminde silinir (kullanıcı talebi)
+        prefs.clearTodayIntakes()
+
         refreshDailyUI()
         refreshStatsUI()
         Toast.makeText(this, "Gün tamamlandı ve kaydedildi! Yeni gün başladı.", Toast.LENGTH_LONG).show()
     }
 
     private fun refreshStatsUI() {
-        val history = prefs.getHistory()
+        // 1. Günlük İstatistikler (Saat Kaçta Ne Kadar İçildi)
+        val todayIntakes = prefs.getTodayIntakes()
+        val todayTotal = prefs.currentWater
+        binding.tvTodayStatsTotal.text = String.format(Locale.getDefault(), "%.2f L", todayTotal)
+        binding.tvTodayStatsCount.text = "${todayIntakes.size} kez"
 
-        // Haftalık: Son 7 tamamlanmış gün
+        if (todayIntakes.isNotEmpty()) {
+            val sb = StringBuilder()
+            todayIntakes.reversed().forEachIndexed { index, intake ->
+                sb.append("• Saat ${intake.timeStr} ➔ +${String.format(Locale.getDefault(), "%.2f L", intake.amount)}\n")
+            }
+            binding.tvTodayIntakeList.text = sb.toString().trimEnd()
+        } else {
+            binding.tvTodayIntakeList.text = "Bugün henüz su girişi yapılmadı."
+        }
+
+        // 2. Haftalık İstatistikler (Son 7 Tamamlanmış Gün)
+        val history = prefs.getHistory()
         val last7 = history.takeLast(7)
         if (last7.isNotEmpty()) {
             val total7 = last7.sumOf { it.amount }
@@ -254,7 +304,7 @@ class MainActivity : AppCompatActivity() {
 
             // Günlük tüketim dökümü
             val breakdown = StringBuilder()
-            last7.reversed().forEachIndexed { i, record ->
+            last7.reversed().forEach { record ->
                 val percent = if (record.goal > 0) ((record.amount / record.goal) * 100).toInt() else 0
                 breakdown.append("• ${record.dateStr}: ${String.format(Locale.getDefault(), "%.2f L", record.amount)} (%$percent)\n")
             }
@@ -265,26 +315,5 @@ class MainActivity : AppCompatActivity() {
             binding.weeklyBarChart.visibility = View.GONE
             binding.tvWeeklyBreakdown.text = "Henüz tamamlanmış gün kaydı yok.\n'Günü Bitir' butonuna bastığınızda burada listelenecektir."
         }
-
-        // Aylık: Son 30 tamamlanmış gün
-        val last30 = history.takeLast(30)
-        if (last30.isNotEmpty()) {
-            val total30 = last30.sumOf { it.amount }
-            val avg30 = total30 / last30.size
-            binding.tvMonthlyTotal.text = String.format(Locale.getDefault(), "%.2f L", total30)
-            binding.tvMonthlyAverage.text = String.format(Locale.getDefault(), "%.2f L", avg30)
-
-            val breakdownMonthly = StringBuilder()
-            last30.reversed().forEach { record ->
-                val percent = if (record.goal > 0) ((record.amount / record.goal) * 100).toInt() else 0
-                breakdownMonthly.append("• ${record.dateStr}: ${String.format(Locale.getDefault(), "%.2f L", record.amount)} (%$percent)\n")
-            }
-            binding.tvMonthlyBreakdown.text = breakdownMonthly.toString().trimEnd()
-        } else {
-            binding.tvMonthlyTotal.text = "0.00 L"
-            binding.tvMonthlyAverage.text = "0.00 L"
-            binding.tvMonthlyBreakdown.text = "Henüz tamamlanmış gün kaydı yok."
-        }
     }
 }
-

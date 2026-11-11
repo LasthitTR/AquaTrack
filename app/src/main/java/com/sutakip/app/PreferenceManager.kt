@@ -11,6 +11,11 @@ data class DayRecord(
     val goal: Double
 )
 
+data class WaterIntakeRecord(
+    val timeStr: String,
+    val amount: Double
+)
+
 class PreferenceManager(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("su_takip_prefs", Context.MODE_PRIVATE)
@@ -20,6 +25,7 @@ class PreferenceManager(context: Context) {
         private const val KEY_DAILY_GOAL = "daily_goal"
         private const val KEY_RECENT_AMOUNTS = "recent_amounts"
         private const val KEY_HISTORY = "history"
+        private const val KEY_TODAY_INTAKES = "today_intakes"
     }
 
     // Günlük su miktarı (Litre)
@@ -58,13 +64,63 @@ class PreferenceManager(context: Context) {
 
     fun addRecentAmount(amount: Double) {
         val current = getRecentAmounts().toMutableList()
-        // Aynı miktar varsa önce çıkarılır, listenin en başına eklenir (böylece tekrar etmez)
         current.removeAll { Math.abs(it - amount) < 0.001 }
         current.add(0, amount)
         saveRecentAmounts(current.take(3))
     }
 
-    // Tamamlanmış günlerin geçmişi
+    // Bugünkü içim kayıtları (saat ve miktar)
+    fun getTodayIntakes(): List<WaterIntakeRecord> {
+        val raw = prefs.getString(KEY_TODAY_INTAKES, null) ?: return emptyList()
+        return try {
+            val jsonArray = JSONArray(raw)
+            val list = mutableListOf<WaterIntakeRecord>()
+            for (i in 0 until jsonArray.length()) {
+                val obj = jsonArray.getJSONObject(i)
+                list.add(
+                    WaterIntakeRecord(
+                        timeStr = obj.optString("time", ""),
+                        amount = obj.optDouble("amount", 0.0)
+                    )
+                )
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun addTodayIntake(intake: WaterIntakeRecord) {
+        val list = getTodayIntakes().toMutableList()
+        list.add(intake)
+        saveTodayIntakes(list)
+    }
+
+    // Son işlemi geri al (Undo)
+    fun removeLastIntake(): WaterIntakeRecord? {
+        val list = getTodayIntakes().toMutableList()
+        if (list.isEmpty()) return null
+        val lastItem = list.removeAt(list.size - 1)
+        saveTodayIntakes(list)
+        return lastItem
+    }
+
+    private fun saveTodayIntakes(list: List<WaterIntakeRecord>) {
+        val jsonArray = JSONArray()
+        for (item in list) {
+            val obj = JSONObject()
+            obj.put("time", item.timeStr)
+            obj.put("amount", item.amount)
+            jsonArray.put(obj)
+        }
+        prefs.edit().putString(KEY_TODAY_INTAKES, jsonArray.toString()).apply()
+    }
+
+    fun clearTodayIntakes() {
+        prefs.edit().remove(KEY_TODAY_INTAKES).apply()
+    }
+
+    // Tamamlanmış günlerin geçmişi (Haftalık takip için)
     fun getHistory(): List<DayRecord> {
         val raw = prefs.getString(KEY_HISTORY, null) ?: return emptyList()
         return try {
@@ -100,4 +156,3 @@ class PreferenceManager(context: Context) {
         prefs.edit().putString(KEY_HISTORY, jsonArray.toString()).apply()
     }
 }
-
